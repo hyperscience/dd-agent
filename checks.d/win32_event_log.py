@@ -61,7 +61,8 @@ class Win32EventLog(AgentCheck):
         # Save any events returned to the payload as Datadog events
         for ev in events:
             log_ev = LogEvent(ev, self.agentConfig.get('api_key', ''),
-                              self.hostname, tags, notify)
+                              self.hostname, tags, notify,
+                              self.init_config.get('tag_event_id', False))
 
             # Since WQL only compares on the date and NOT the time, we have to
             # do a secondary check to make sure events are after the last
@@ -98,7 +99,7 @@ class EventLogQuery(object):
     def to_wql(self):
         ''' Return this query as a WQL string. '''
         wql = """
-        SELECT Message, SourceName, TimeGenerated, Type, User, InsertionStrings
+        SELECT Message, SourceName, TimeGenerated, Type, User, InsertionStrings, EventCode
         FROM Win32_NTLogEvent
         WHERE TimeGenerated >= "%s"
         """ % (self._dt_to_wmi(self.start_ts))
@@ -150,13 +151,14 @@ class EventLogQuery(object):
 
 
 class LogEvent(object):
-    def __init__(self, ev, api_key, hostname, tags, notify_list):
+    def __init__(self, ev, api_key, hostname, tags, notify_list, tag_event_id):
         self.event = ev
         self.api_key = api_key
         self.hostname = hostname
         self.tags = tags
         self.notify_list = notify_list
         self.timestamp = self._wmi_to_ts(self.event.TimeGenerated)
+        self.tag_event_id = tag_event_id
 
     def to_event_dict(self):
         return {
@@ -169,7 +171,7 @@ class LogEvent(object):
             'alert_type': self._alert_type(self.event),
             'source_type_name': SOURCE_TYPE_NAME,
             'host': self.hostname,
-            'tags': self.tags
+            'tags': self._tags(self.event, self.tags)
         }
 
     def is_after(self, ts):
@@ -189,6 +191,15 @@ class LogEvent(object):
         dt = datetime(year=year, month=month, day=day, hour=hour, minute=minute,
                       second=second, microsecond=microsecond) + tz_delta
         return int(calendar.timegm(dt.timetuple()))
+
+    def _tags(self, event, tags):
+        ''' Inject additional tags into the list already supplied to LogEvent.
+        '''
+        if tags is None:
+            tags = []
+        if self.tag_event_id:
+            tags.append("event_id:{event_id}".format(event_id=event.EventCode))
+        return tags
 
     def _msg_title(self, event):
         return '%s/%s' % (event.Logfile, event.SourceName)
